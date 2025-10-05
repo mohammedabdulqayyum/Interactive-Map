@@ -12,7 +12,7 @@
       --btn-on-text: #015701;
     }
     html, body { margin: 0; height: 100%; overflow: hidden; background: #222; font-family: Arial, sans-serif; }
-    #map-container { position: relative; width: 100vw; height: 100vh; background: #222; }
+    #map-container { position: relative; width: 100vw; height: 100vh; background: #222; touch-action: manipulation; }
     #base-map { width: 100%; height: 100%; object-fit: cover; display: block; user-select: none; -webkit-user-drag: none; pointer-events: none; }
 
     .marker {
@@ -130,10 +130,11 @@
     </div>
   </div>
 
-  <div id="hint">Open Menu → choose Kabah; or expand Wells/Markets to choose a named item; or pick Shoemaker, Blacksmith, Butchers. Click the map to place permanently. Hover any placed icon to see its name.</div>
+  <div id="hint">Place everything once, then Export JSON. Importing the same JSON later preloads memory so clicking any tool auto-places it at the memorized spot.</div>
   <div id="saved">Saved</div>
 
   <script>
+    // Tool config
     const TOOL_CONFIG = {
       kabah:     { label: 'Kabah',     src: 'images/arab.png',        width: 40, height: 40, single: true },
       well:      { label: 'Wells',     src: 'images/water-well.png',  width: 32, height: 32 },
@@ -143,19 +144,33 @@
       butcher:   { label: 'Butchers',  src: 'images/butcher.png',     width: 34, height: 34 }
     };
 
+    // Subtypes
     const MARKET_TYPES = [
       'Bayn al darayn',"Abu Bakr's shop",'Attarin (Perfume shops)','The layl (night) market','Slave market',
       'Mawqif al baqar','Kathib (Kayd) market','Zuqaq al nar','Bayt al azlam (House of Divination)','Qaraz (Qurt) Shops',
-      'The hazwarah market','Gold and silver shops','Milk shops','Khayyatin (Tailors)','Poultry market','Al suwayqah','Grain shops'
+      'The hazwarah market','Gold and silver shops','Milk shops','Khayyatin (Tailors)','Poultry market','Al suwayqah','Grain shops',
+      'Sheep market'
     ];
-
     const WELL_TYPES = [
       'Badhdhar well','Tawa well','Huwaytib well','Rumm well','Al suwayqah well','Sajlah well',
       'Umm Jalan well','Zam zam well','Ramram (maramram) well','Al Jafr well','Al thurayya (Hafir) well',
-      'Sunbulah (Ubayy) well','Umm hardan well','Al aswad well','Ajul well','Aluq well'
+      'Sunbulah (Ubayy) well','Umm hardan well','Al aswad well','Ajul well','Aluq well',
+      'Ajyad well','Upper (Khumm) well'
     ];
 
-    const STORAGE_KEY = 'interactive-map-markers-menu-v4';
+    // Storage keys
+    const STORAGE_KEY = 'interactive-map-markers-menu-v7';
+    const MEMORY_KEY  = STORAGE_KEY + ':memory';
+
+    // Memory helpers for last placements by type/subtype
+    function keyFor(type, meta = {}) {
+      if (type === 'market' && meta.marketName) return `market::${meta.marketName}`;
+      if (type === 'well'   && meta.wellName)   return `well::${meta.wellName}`;
+      return type; // kabah, shoemaker, blacksmith, butcher
+    }
+    function loadMemory() { try { return JSON.parse(localStorage.getItem(MEMORY_KEY) || '{}'); } catch { return {}; } }
+    function saveMemory(mem) { try { localStorage.setItem(MEMORY_KEY, JSON.stringify(mem)); } catch {} }
+    let placementMemory = loadMemory();
 
     // DOM
     const container = document.getElementById('map-container');
@@ -180,7 +195,7 @@
     let activeMarketName = null;
     let activeWellName = null;
 
-    // Build well list
+    // Build Well subitems
     for (const name of WELL_TYPES) {
       const item = document.createElement('div');
       item.className = 'subitem';
@@ -194,11 +209,22 @@
         item.classList.add('active');
         iconsPanel.classList.remove('open');
         iconsBtn.classList.remove('active');
+
+        // Memory-first: if present and not on canvas, auto-place at memorized coords
+        const k = keyFor('well', { wellName: name });
+        const rec = placementMemory[k];
+        if (rec && !markerExists('well', { wellName: name })) {
+          const x = parseFloat(rec.x), y = parseFloat(rec.y);
+          const marker = createMarker('well', x, y, { wellName: name });
+          container.appendChild(marker);
+          saveMarkers();
+        }
+        // If no memory yet, user must click the map once to define it
       });
       wellsList.appendChild(item);
     }
 
-    // Build market list
+    // Build Market subitems
     for (const name of MARKET_TYPES) {
       const item = document.createElement('div');
       item.className = 'subitem';
@@ -212,6 +238,15 @@
         item.classList.add('active');
         iconsPanel.classList.remove('open');
         iconsBtn.classList.remove('active');
+
+        const k = keyFor('market', { marketName: name });
+        const rec = placementMemory[k];
+        if (rec && !markerExists('market', { marketName: name })) {
+          const x = parseFloat(rec.x), y = parseFloat(rec.y);
+          const marker = createMarker('market', x, y, { marketName: name });
+          container.appendChild(marker);
+          saveMarkers();
+        }
       });
       marketsList.appendChild(item);
     }
@@ -245,32 +280,47 @@
       resetSelections();
     });
 
-    // Activate top-level non-nested tools
+    // Activate top-level tools (kabah, shoemaker, blacksmith, butcher) with memory-first
     document.querySelectorAll('.tool[data-tool]').forEach(el => {
       el.addEventListener('click', () => {
-        activeTool = el.dataset.tool;
+        const type = el.dataset.tool;
+        activeTool = type;
         activeMarketName = null;
         activeWellName = null;
+
         document.querySelectorAll('.tool[data-tool]').forEach(t => t.classList.remove('active'));
         el.classList.add('active');
         wellsList.querySelectorAll('.subitem').forEach(mi => mi.classList.remove('active'));
         marketsList.querySelectorAll('.subitem').forEach(mi => mi.classList.remove('active'));
         iconsPanel.classList.remove('open');
         iconsBtn.classList.remove('active');
+
+        const k = keyFor(type, {});
+        const rec = placementMemory[k];
+        if (rec && !markerExists(type, {})) {
+          if (type === 'kabah' && container.querySelector('.marker[data-type="kabah"]')) return;
+          const x = parseFloat(rec.x), y = parseFloat(rec.y);
+          const marker = createMarker(type, x, y, {});
+          container.appendChild(marker);
+          saveMarkers();
+        }
+        // If no memory yet, user must click the map once to define it
       });
     });
 
-    // Place markers
+    // Place markers on map click (first-time placement and any manual re-placement)
     container.addEventListener('pointerdown', (e) => {
       if (!activeTool) return;
       const rect = container.getBoundingClientRect();
       const xPct = ((e.clientX - rect.left) / rect.width) * 100;
       const yPct = ((e.clientY - rect.top) / rect.height) * 100;
 
+      // Kabah unique: prevent multiple
       if (activeTool === 'kabah') {
         const exists = container.querySelector('.marker[data-type="kabah"]');
         if (exists) return;
       }
+
       const marker = createMarker(activeTool, xPct, yPct, { marketName: activeMarketName, wellName: activeWellName });
       container.appendChild(marker);
       saveMarkers();
@@ -278,8 +328,9 @@
 
     // Utilities
     clearBtn.addEventListener('click', () => {
+      // Remove markers from canvas, but DO NOT clear memory
       container.querySelectorAll('.marker').forEach(m => m.remove());
-      saveMarkers();
+      saveMarkers(); // save empty canvas; memory persists for future auto-placement
     });
     exportBtn.addEventListener('click', () => {
       const data = readMarkers();
@@ -291,9 +342,17 @@
     importBtn.addEventListener('click', () => importFile.click());
     importFile.addEventListener('change', async (e) => {
       const file = e.target.files?.[0]; if (!file) return;
-      try { const text = await file.text(); const data = JSON.parse(text); loadMarkers(data); saveMarkers(); }
-      catch { alert('Invalid JSON'); }
-      finally { importFile.value = ''; }
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        loadMarkers(data);    // draw markers from file
+        saveMarkers();        // persist canvas
+        // memory is rebuilt inside loadMarkers, enabling auto-placement on menu clicks
+      } catch {
+        alert('Invalid JSON');
+      } finally {
+        importFile.value = '';
+      }
     });
 
     // Helpers
@@ -304,12 +363,22 @@
       marketsList.querySelectorAll('.subitem').forEach(mi => mi.classList.remove('active'));
     }
 
+    function markerExists(type, meta = {}) {
+      if (type === 'market' && meta.marketName) {
+        return !!container.querySelector(`.marker[data-type="market"][data-market="${meta.marketName}"]`);
+      }
+      if (type === 'well' && meta.wellName) {
+        return !!container.querySelector(`.marker[data-type="well"][data-well="${meta.wellName}"]`);
+      }
+      return !!container.querySelector(`.marker[data-type="${type}"]`);
+    }
+
     function createMarker(type, xPct, yPct, meta = {}) {
       const cfg = TOOL_CONFIG[type];
       const el = document.createElement('img');
       el.src = cfg.src; el.alt = type; el.className = 'marker'; el.dataset.type = type;
 
-      // Choose hover label and store metadata
+      // Hover label + metadata
       let hoverLabel = cfg.label;
       if (type === 'market' && meta.marketName) {
         el.dataset.market = meta.marketName;
@@ -319,7 +388,7 @@
         el.dataset.well = meta.wellName;
         hoverLabel = meta.wellName;
       }
-      el.title = hoverLabel; // native tooltip on hover
+      el.title = hoverLabel;
 
       el.dataset.x = +xPct.toFixed(4);
       el.dataset.y = +yPct.toFixed(4);
@@ -327,6 +396,18 @@
       el.style.height = cfg.height + 'px';
       el.style.left = el.dataset.x + '%';
       el.style.top  = el.dataset.y + '%';
+
+      // Update memory for this exact tool/subtype
+      const memKey = keyFor(type, { marketName: el.dataset.market, wellName: el.dataset.well });
+      placementMemory[memKey] = {
+        type,
+        x: el.dataset.x,
+        y: el.dataset.y,
+        marketName: el.dataset.market || null,
+        wellName: el.dataset.well || null
+      };
+      saveMemory(placementMemory);
+
       return el;
     }
 
@@ -366,6 +447,16 @@
         if (item.title) el.title = item.title;
         container.appendChild(el);
       }
+      // Rebuild memory from loaded markers so menu clicks auto-restore what's visible
+      placementMemory = {};
+      container.querySelectorAll('.marker').forEach(m => {
+        const type = m.dataset.type;
+        const marketName = m.dataset.market || null;
+        const wellName = m.dataset.well || null;
+        const k = keyFor(type, { marketName, wellName });
+        placementMemory[k] = { type, x: m.dataset.x, y: m.dataset.y, marketName, wellName };
+      });
+      saveMemory(placementMemory);
     }
 
     function showSavedToast() {
