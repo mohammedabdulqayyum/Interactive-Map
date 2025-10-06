@@ -130,7 +130,7 @@
     </div>
   </div>
 
-  <div id="hint">Place everything once, then Export JSON. Importing the same JSON later preloads memory so clicking any tool auto-places it at the memorized spot.</div>
+  <div id="hint">Import JSON to preload positions. Then clicking any tool auto-places it at the memorized spot. Map clicks will not create markers.</div>
   <div id="saved">Saved</div>
 
   <script>
@@ -219,7 +219,6 @@
           container.appendChild(marker);
           saveMarkers();
         }
-        // If no memory yet, user must click the map once to define it
       });
       wellsList.appendChild(item);
     }
@@ -304,26 +303,12 @@
           container.appendChild(marker);
           saveMarkers();
         }
-        // If no memory yet, user must click the map once to define it
       });
     });
 
-    // Place markers on map click (first-time placement and any manual re-placement)
+    // Map click placement disabled per request
     container.addEventListener('pointerdown', (e) => {
-      if (!activeTool) return;
-      const rect = container.getBoundingClientRect();
-      const xPct = ((e.clientX - rect.left) / rect.width) * 100;
-      const yPct = ((e.clientY - rect.top) / rect.height) * 100;
-
-      // Kabah unique: prevent multiple
-      if (activeTool === 'kabah') {
-        const exists = container.querySelector('.marker[data-type="kabah"]');
-        if (exists) return;
-      }
-
-      const marker = createMarker(activeTool, xPct, yPct, { marketName: activeMarketName, wellName: activeWellName });
-      container.appendChild(marker);
-      saveMarkers();
+      // No-op: placement occurs only via menu clicks using memorized coordinates
     });
 
     // Utilities
